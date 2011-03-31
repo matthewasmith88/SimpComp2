@@ -1,0 +1,475 @@
+The SimpComp 2 (Simple Computer - Second Version)
+Author: George Mobus
+Date:   01/16/2011
+
+
+The SimpComp (SC-2) is a single program computer designed for use in embedded real-time applications. 
+It has a ROM address space containing a debug monitor and BIOS code. The SC-2 supports up to 96 
+hardware interrupts/exceptions and 32 software traps (vector table of 128 words). The interrupt vector
+table is hardwired for fast CPU lookup. IVT starts at address 0x2000.
+
+The system can be operated in executive mode to protect the OS and set up protections for text and data
+areas of the user program space. An RTOS may be installed in low memory and protected. Certain 
+instructions can only be executed by the low memory text (below 0x2FFF) when executive mode has been 
+activated (by the bootstrap loader). For applications that do not need executive mode processing (e.g.
+not multi-tasking) this feature may be ignored. All instructions will then be available to the user
+program.
+
+SC-2 is a load/store machine with several addressing modes to support high-level language constructs.
+There are 16, 16-bit registers in the register file. The first four registers can be addressed at the
+byte level to faciliate character manipulations. $R0low (low order byte in register 0) is used for I/O
+operations. Memory is byte addressable and has a 16-bit address space (65,536 - flat model).
+
+There are five basic addressing modes for the load and store instructions (see below)
+
+The machine supports 2048 I/O 8-bit registers (ports). Special I/O instructions cause the selection of
+I/O space as opposed to memory address space.
+
+There are 128 interrupts/exceptions/software traps available in the interrupt vector table (IVT). 
+Thirty-two of these are specifically used for traps to support the OS. These are segregated into 
+sixteen priority levels (8 events each level). Hardware interrupts have the highest priority (level 0)
+with the system clock hard wired to IRQ 0 of level 0. ISR vectors run from 0 to 87 with exceptions 
+running from 88 to 95. The rest (96-127) are for software traps. See descriptions at the end of this
+document.
+
+ALU operations, for the most part, are two register operand instructions with the first named register
+indicated also serving as the destination register. Only word precision ALU operations are supported.
+Byte wide arithmetic must be done using the first four registers and discarding the high-order bytes (e.g.,
+incrementing through the ASCII character set).
+
+CPU
+Register File
+	16, 16-bit general and dual purpose registers: $R0 - $RF
+	$R0 - $R3 are byte addressable for character manipulations and unsigned bytes
+	$R4 - $R7 are scratch pad only registers
+	$R8 - $RB reference or scratch pad as needed
+		$R8 is low order word for multiplication result
+		$R9 is high order word for multiplication result
+		$RA is destination for quotient from division
+		$RB is destination for remainder from division
+	$RC - index
+	$RD - index
+	$RE - stack pointer
+	$RF - frame pointer
+System Registers
+	PC  Program Counter
+	IR  Instruction Register
+	SW  Status Word
+		Condition Codes: [bF..bC]
+			N : negative
+			Z : zero
+			C : carry out
+			O : overflow
+		Interrupt Management: [bB..b0]
+			current interrupt [bB..b4]
+			interrupt priority mask [b3..b0]
+
+			 F E D C B A 9 8 7 6 5 4 3 2 1 0
+			[ | | | | | | | | | | | | | | | ]
+			 N Z C O| current int | |int pri|
+					       ^  mask
+                                               +--- interrupt pending
+
+	EM  Executive Mode - single bit register set when OS invoked (e.g. by trap 16)
+	
+	TS  Text Segment boundary (end of text)
+	ROS Read-only data boundary (end of RO memory)
+
+ALU
+All alu operations are performed on register data only. Condition codes are set by ALU operations.
+
+	Five 16 bit arithmetic funcitons
+		ADDI	$Rd <- $Rd <- $Rd + SEXT(immed7)
+		ADD	$Rd <- $Rd + $Rs	(2-operand)
+		SUB	$Rd <- $Rd + NEG($Rs) ; neg performs 2's-comp negation
+		SUBI	$Rd <- $Rd - SEXT(immed7)
+		MUL	$R8 <- LOW($Rs1 * $Rs2) ; low order word of result
+			$R9 <- HIGH($Rs1 * $Rs2); high order word of result
+		DIV	$RA <- QUOT($Rs1 / $Rs2); quotient or result
+			$RB <- MOD($Rs1 / $Rs2) ; remainder (also modulo)
+		NEG	$Rd <- ~$Rs + 1	; two's comp negation 
+	Four 16 bit logical operations
+		AND	$Rd <- $Rs1 & $Rs2	; bitwise and
+		OR	$Rd <- $Rs1 | $Rs2	; bitwise or
+		XOR	$Rd <- $Rs1 ^ $Rs2	; bitwise xor
+		NOT	$Rd <- ~$Rs		; bitwise not
+		SHL	$Rd <- $Rs * 2
+		SHR	$Rd <- $Rs / 2
+
+
+Memory
+	65,536 (0x0000 - 0xFFFF) single byte memory
+	Map:
+		0x0000 - 0x2FFF executive mode memory (OS)
+			0x0000 - 0x1FFF debug monitor and OS
+			0x2000 - 0x20FF interrupt vector table
+			0x2100 - 0x2FFF OS code and data
+		0x3000 - 0xFFFF user space (non-executive mode memory)
+
+Instruction Set
+
+Addressing modes:
+	Load and store modes
+	Immediate - load a register with immediate value, 7 bits
+
+	Register direct - load or store register using a register address
+	Base-relative - load a register, effective address = $Rb + $Roffset (only reference registers)
+	Indexed - load a register using the index registers and automatically increment it
+	Indirect - load a register using an address stored in memory pointed at by a register
+	
+
+Symbols Used:
+$R 	- register in file
+$Rd	- destination register
+$Rs(n)	- source register n=N/A for 2 address operand formats, n=1 or 2 for 3 addresses
+$Rr	- reference register, must be $R8-$RB or $RC-$RF
+$Rlow	- low order byte of $R0-$R3
+$Rhigh	- high order word of $R0-$R3
+$Ro	- register containing offset value for base-relative addressing
+r       - 2-bit designator for base register $R8-$RB (00=8, 01=9, 10=A, 11=B)
+amod	- addressing mode field
+immed7	- immediate value field
+immed11	- immediate value field 11 bits that will be sign extended for pc-relative branching
+u	- unused
+port#	- I/O port number (0-2048)
+imask	- interrupt priority group mask
+
+	
+Instruction formats:
+	 F E D C B A 9 8 7 6 5 4 3 2 1 0
+	[ | | | | | | | | | | | | | | | ]
+0	[ opcode  ]  $Rd  ]  immed7     ]
+1	[ opcode  ]  $Rd  ]  $Rr  ] amod] amod is addressing mode
+2	[ opcode  ]  $Rd  ]  $Rb  ]$Ro  ] $Ro containing offset = $R8-$RB
+2a      [ opcode  ]  $Rs/d]  r] $Ro   ] ] r is the 2-bit designation for the base register
+3	[ opcode  ]  $Rs  ]   u   ] amod] 
+4	[ opcode  ]  $Rd  ]  $Rr  ] u   ] 
+5	[ opcode  ]  $Rd  ]     u       ]
+6	[ opcode  ]    immed11/port#    ] branch pc-relative and I/O ports (2048)
+7	[ opcode  ]  $Rr  ]   u   [ amod] system commands using register operand
+7a	[ opcode  ] trap# ]   u   [ amod] system commands using direct operand
+
+
+
+
+Load and Store instructions (data movement)
+	Load Immediate:
+	LDI	$Rd, immed7	0	$Rd <- immed7; pad with leading 0s
+	
+	Load Effective Address:
+	LADR	$Rd		5	$Rd <- M[PC] << 8; $Rd <- M[PC+1]; PC <- PC+2
+					; This is the only two-word instruction in the system
+					; it takes four memory cycles to complete
+	
+	Load Register-relative
+	LDB	$Rd, $Rr	1	$Rdlow <- M[$Rr] ; only for $R0-$R3 $Rr can be any reg
+	LDW	$Rd, $Rr	1	$Rdlow <- M[$Rr], $Rdhigh <- M[$Rr + 1]; any register
+	
+	Load Base-relative
+	LDB	$Rd, %$Rb, $Rr	2	$Rdlow <- M[$Rb + $Ro]
+	LDW	$Rd, %$Rb, $Rr	2	$Rdlow <- M[$Rb + $Ro]; $Rdhigh <- M[$Rb + $Ro + 1]
+	
+	Load Indexed
+	LDB	$Rd, &$Ri	1	$Rdlow <- M[$Ri]; $Ri <- $Ri + 1
+	LDW	$Rd, &$Ri	1	$Rdlow <- M[$Ri]; $Ri <- $Ri + 1; $Rdhigh <- M[$Ri]; 
+						  $Ri <- $Ri + 1
+	
+	Load Indirect
+	LDW	$Rd, @$Rr	1	$Rd <- M[M[$Rr]]
+
+	Store Register-relative
+	STB	$Rs, $Rr	1	M[$Rr] <- $Rslow
+	STW	$Rs, $Rr	1	M[$Rr] <- $Rslow; M[$Rr + 1] <- $Rshigh
+	
+	Store Base-relative
+	STB	$Rs, %$Rb, $Rr	2	M[$Rb + $Rr] <- $Rslow ; $Rr must be $R8-$RB
+	STW	$Rs, %$Rb, $Rr	2	M[$Rb + $Rr] <- $Rslow; M[$Rb + $Rr + 1] <- $Rshigh
+	
+	Store Indexed
+	STB	$Rs, &$Ri	1	M[$Ri] <- $Rslow; $Ri <- $Ri + 1
+	STW	$Rs, &$Ri	1	M[$Ri] <- $Rslow; $Ri <- $Ri + 1; 
+					M[$Ri] <- $Rshigh; $Ri <- $Ri + 1
+	
+	Store Indirect
+	STW	$Rs, @$Rr	1	M[M[$Rr]] <- $Rs
+	
+	Move (register-register)
+	MOVB	$Rd, $Rs	1	$Rdlow <- $Rslow ; only for $R0- $R3
+	MOVW	$Rd, $Rs	1	$Rd <- $Rs
+	
+	Special movements (word only)
+	PUSH	$Rs		3	M[$SP] <- $Rslow; $SP <- $SP - 1; 
+					M[$SP] <- $Rshigh; $SP <- $SP - 1;
+	POP	$Rd		3	$SP <- $SP + 1; $Rdhigh <- M[$SP];
+					$SP <- $SP + 1; $Rdlow <- M[$SP]
+
+ALU instructions (all alu instructions set the condition codes)
+	ADDI	$Rd, immed7	0	$Rd <- $Rd + SEXT(immed7)
+	ADD	$Rd, $Rs	4	$Rd <- $Rd + $Rs
+	SUBI	$Rd, immed7	0	$Rd <- $Rd - SEXT(immed7)
+	SUB	$Rd, $Rs	4	$Rd <- $Rd - $Rs
+	NEG	$Rd		5	$Rd <- ~$Rd + 1
+	MUL	$Rs1, $Rs2	4	$R8 <- LOW($Rs1 * $Rs2); $R9 <- HIGH($Rs1 * $Rs2)
+	DIV	$Rs1, $Rs2	4	$RA <- RESULT($Rs1 / $Rs2); $RB <- REMAINDER($Rs1 / $Rs2)
+	AND	$Rd, $Rs	4	$Rd <- $Rd & $Rs
+	OR	$Rd, $Rs	4	$Rd <- $Rd | $Rs
+	XOR	$Rd, $Rs	4	$Rd <- $Rd ^ $Rs
+	NOT	$Rd		5	$Rd <- ~$Rd
+	SHL	$Rd, $Rs	4	$Rd <- $Rs * 2
+	SHR	$Rd, $Rs	4	$Rd <- $Rs / 2
+
+Flow of control instructions
+	BR	$Rr		3	PC <- $Rr; branch absolute
+	BRcc	$Rr		3	if (cc) PC <- $Rr; else PC unaffected; cc = N, Z, C, O
+	BR	PC, immed11	6	PC <- SEXT(immed11); branch pc relative
+	JSR	$Rr			push(PC); PC <- $Rr
+	RET				PC <- pop() ; return addres
+	RETI				SW <- pop(); PC <- pop();
+
+I/O instructions
+	IN	port#		6	$R0low <- IO[port#]; if port is write only results are undefined
+	OUT	port#		6	IO[port#] <- $R0low; if port is read only results are undefined
+
+Miscellaneous instructions
+	EI	$Rlow		7	SW[b3..b0] | $Rlow[b3..b0]; b7..b4 are set to 0s
+	DI	$Rlow		7	SW[b3..b0] & $Rlow[b3..b0]; b7..b4 are set to 1s
+	TRAP	trap#		7a	push(SW); push(PC); PC <- fetch(IVT[trap#]); traps 16-33 cause
+					CPU to enter executive mode (if used). traps 0-15 can only be
+					executed in executive mode (if used). TRAP #16 requests setting
+					executive mode operation.
+
+Opcodes and non-register fields
+	OPCODES			AMODE		amod	$Rr-ref
+	Load
+	Format 0
+	LDI	00001	0x01
+	
+	LADR	10101	0x17
+
+	
+	Format 1
+	LDB	00010	0x02
+	LDW	00011	0x03	
+				register-rel	001
+				indexed		010
+				indirect	011
+
+	Format 2
+	LDB	00100	0x04	base-rel		000 = $R8..111 = $RF
+	LDW	00101	0x05	base-rel		000 = $R8..111 = $RF
+
+	Store
+	Format 1
+	STB	00110	0x06
+	STW	00111	0x07
+				register-rel	001
+				indexed		010
+				indirect	011
+	
+	Format 2
+	STB	00100	0x04	base-rel		000 = $R8..111 = $RF
+	STW	00101	0x05	base-rel		000 = $R8..111 = $RF
+
+
+	Move
+	Format 1
+	MOVB	00010	0x01	reg-to-reg	100 ; same opcode as LDB
+	MOVW	00011	0x02	reg-to-reg	101 ; same opcode as LDW
+
+	Special
+	Format 3
+	PUSH	00111	0x7			111 ; same as store word
+	POP	00011	0x3			111 ; same as load word
+
+	ALU
+	Format 0
+	ADDI	01000	0x08
+	SUBI	01001	0x09
+	
+	Format 4
+	ADD	01010	0x0A
+	SUB	01011	0x0B
+	MUL	01100	0x0C
+	DIV	01101	0x0D
+	AND	01110	0x0E
+	OR	01111	0x0F
+	XOR	10000	0x10
+	
+	Format 1
+	SHL	11110	0x1E			000
+	SHR	11110	0x1E			001
+	
+	Format 5
+	NEG	10001	0x11
+	NOT	10010	0x12
+	
+	FLOW
+	Format 3
+	BR	10011	0x13			000
+	BRcc	10100	0x14			N=001; Z=010; C=011; O=100
+	JSR	10011	0x13			111 ; same opcode as BR 
+	RET	10011	0x13			110
+	RETI	10011	0x13			101
+	Format 6
+	BR PC	10101	0x15	
+	
+	I/O
+	Format 6
+	IN	11000	0x18
+	OUT	11001	0x19
+	
+	MISC
+	Format 7
+	EI	10110	0x16			000
+	DI	10110	0x16			001
+	TRAP	10110	0x16			010 ; forces interp of register field as trap number
+	HALT	11111	0x1F
+	
+	RESERVED
+	
+	0x1A
+	0x1B
+	0x1C
+	0x1D
+
+
+
+------------------------------------------------------------------------------------------------------
+The following is mostly for information purposes. The I/O (console) traps will be simulated much like
+the LC-3 (e.g. with printf and scanf or getch). We will not be concerned with interrupts or exceptions
+in this version. We will discuss the below but only as far as it is instructive in understanding 
+this system.
+
+	Trap Table
+	Basic BIOS
+	IVT+96+	0*2	set executive mode bit
+		1	move $R0 to TS (user text starts at 0x3000, text segment boundary for 
+			protection exception detection)
+		2	move $R0 to ROS (read only memory segment boundary [from TS to ROS] for protect
+		3	set system clock
+				$R0 contains miliseconds
+				$R1 contains seconds
+				$R2 contains minutes
+				$R3 contains hour (24 hour clock)
+		4	set system date
+				$R0 contains low order 16 bits of Julian date
+				$R1 contains high order 16 bits of Julian date
+				* for a 64 bit JD impelentation $R2 and $R3 may be needed
+		5	interrupt control
+				$R0 contains service request #
+					0x0000 - disable all interrupts
+					0x0001 - enable all interrupts
+					0x0002 - set interrupt priority mask to contents of $R1low
+				$R1 contains interrupt priority mask if needed
+		6	initialize system timer TIMER0 and start
+				$R0 contains the timer countdown (# of clock cycles to count down of 0)
+		7	request low power mode (most interrupts will wake up)
+		
+		Extended BIOS
+		8	serial I/O requests
+				$R0 contains the serial device code
+					0x0000 - UART0
+					0x0001 - UART1
+					0x0002 - UART2
+					0x0003 - UART3
+					0x0004 - USB
+					0x0005 - Ethernet
+				$R1 contains the specific service request for each device
+				$R2 - $R3 contains parameters
+		9	parallel I/O requests
+				$R0 contains number of parallel channel requested (PIO0-PIO3)
+				$R1 contains service type being requested
+				$R2 - $R3 contains parameters (e.g. data)
+		A	A/D requests
+				$R0 contains channel number (0 - 15)
+				$R1 contains the service
+					0x0000 - initialization
+					0x0001 - get status
+					0x0002 - read data
+				$R0 returns data read
+		B	External memory requests (used for data logging)
+				$R0 contains the specific EXTMEM channel (disk, tape, etc)
+				$R1 contains the service number for that device
+				$R2- $R3 contain the data
+		C	Console services
+				$R0 contains the specific service number
+					0x0000 - check keyboard status (key pressed)
+					0x0001 - get key (clears status register automatically)
+					0x0002 - get string[128]
+						$R1 contains address of buffer
+					0x0003 - check video status (ready to send)
+					0x0004 - put character
+					0x0005 - put string[128]
+						$R1 contains address of buffer
+				return values in $R0
+		D	Create critical section
+		E	Create software timer (used for sleeping tasks)
+		F	Debug Monitor requests (trapped from user trap 1E)
+				$R0 contains the monitor request number 
+					0 - display registers
+					1 - modify register $R1 contains number, $R2 contains value
+					2 - display memory $R1 contains start address, $R2 limit value
+					3 - fill memory $R1 contains start address, $R2 contains limit
+					4 - display system registers
+					5 - modify a system register $R2 contains which register, $R3
+						contains the value
+					6 - set break point, $R2 contains address, when PC contains
+						this value it generates an interrupt which is serviced
+						by calling display memory with a pointer at the breakpoint
+						and that location being 3rd down from top of display
+					7 - unset break point
+					8 - step into
+					9 - step over
+					A - step out
+		
+	User-mode Traps
+		10	Sychronization services
+				0 - semaphore initialization (include timeout)
+				1 - down semaphore
+				2 - up semaphore
+				3 - message/mailbox initialization
+				4 - send message
+				5 - receive message
+				6 - evemt flags initialization
+				
+		11	Set/Read/display Clock 
+		12	Serial I/O requests
+				set modem
+				read/write to modem
+				
+		13	Parallel I/O requests
+		
+		14	File Requests
+		
+		15	
+		16
+		17
+		18
+		19
+		1A
+		1B
+		1C
+		1D
+		1E	debug monitor requests (e.g. set breakpoints etc.)
+		1F
+
+
+The following is not part of the current implementation but you should be familiar with this as we
+move into OS considerations.
+
+Interrupts
+
+There are 16 priority levels for interrupts/exceptions and traps. Levels 0 (higest priority) through
+B (lowest) are reserved for hardware interrupts and system exceptions (e.g. divide-by-zero detect).
+Priority levels C through F are reserved for software traps (system calls). There can be as many as
+eight interrupt/exception or trap numbers for each priority level. Interrupts can be disabled by 
+setting the interrupt priority mask to all zeros (OS control)
+
+Traps
+There are 32 trap slots allotted. Slots 0 - 15 are for BIOS (Basic Input/Output Services) requests.
+In executive mode these services can only be requested by OS code. Slots 16 - 33 are user traps or
+system call vectors used to request RTOS services such as sychronization (e.g. semaphores).
+0 - 7	- BIOS requests
+8 - 15 	- Extended BIOS requests
+16 - 25	- RTOS syncronization services
+26 - 33	- Extended RTOS services
